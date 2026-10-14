@@ -1,0 +1,10 @@
+cff-version: 1.2.0
+message: "Please cite the associated research paper."
+title: "FedCode: Communication-Efficient Federated Learning via Transferring Codebooks"
+type: article
+authors:
+  - name: "Saeed Khalilian"
+  - name: "Vasileios Tsouvalas"
+  - name: "Tanir Ozcelebi"
+  - name: "Nirvana Meratnia"
+url: https://arxiv.org/abs/2311.09270
