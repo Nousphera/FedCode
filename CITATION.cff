@@ -1,10 +1,29 @@
 cff-version: 1.2.0
 message: "Please cite the associated research paper."
+type: software
 title: "FedCode: Communication-Efficient Federated Learning via Transferring Codebooks"
-type: article
 authors:
-  - name: "Saeed Khalilian"
-  - name: "Vasileios Tsouvalas"
-  - name: "Tanir Ozcelebi"
-  - name: "Nirvana Meratnia"
-url: https://arxiv.org/abs/2311.09270
+  - family-names: "Khalilian"
+    given-names: "Saeed"
+  - family-names: "Tsouvalas"
+    given-names: "Vasileios"
+  - family-names: "Ozcelebi"
+    given-names: "Tanir"
+  - family-names: "Meratnia"
+    given-names: "Nirvana"
+repository-code: https://github.com/Nousphera/FedCode
+url: https://nousphera.github.io/FedCode/
+preferred-citation:
+  type: article
+  title: "FedCode: Communication-Efficient Federated Learning via Transferring Codebooks"
+  authors:
+    - family-names: "Khalilian"
+      given-names: "Saeed"
+    - family-names: "Tsouvalas"
+      given-names: "Vasileios"
+    - family-names: "Ozcelebi"
+      given-names: "Tanir"
+    - family-names: "Meratnia"
+      given-names: "Nirvana"
+  year: 2024
+  url: https://arxiv.org/abs/2311.09270
