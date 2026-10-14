@@ -7,6 +7,7 @@ import torchmetrics
 import flwr as fl
 import numpy as np
 from sklearn.cluster import KMeans
+from .codec import floating_weights, pack_calibration, unpack_calibration, is_calibration
 
 'Run k-means on model weights.'
 def apply_kmeans(weights, num_clusters=64):
@@ -35,31 +36,25 @@ def binary_search(data, value):
 
 'Update model state from aggregated clusters.'
 def model_state_from_aggregated_clusters(model_state, clusters):
-	# Replace weights with codebook centers
+	centers = np.sort(np.asarray(clusters).reshape(-1))
+	if not len(centers) or not np.isfinite(centers).all(): raise ValueError('Expected finite nonempty codebook')
+	result = collections.OrderedDict()
 	for name, param in model_state.items():
-		_shape = param.shape
-		w = param.reshape(-1,1)
-		for i in range(len(w)):
-			p = binary_search(clusters, w[i])
-			w[i] = np.array(clusters[p])
-		model_state[name] = w.reshape(_shape).astype(float)
-	return model_state
+		param = np.asarray(param)
+		if not np.issubdtype(param.dtype, np.floating):
+			result[name] = param.copy()
+			continue
+		flat = param.reshape(-1)
+		right = np.searchsorted(centers, flat).clip(0,len(centers)-1)
+		left = (right-1).clip(0,len(centers)-1)
+		choice = np.where(np.abs(flat-centers[left]) <= np.abs(flat-centers[right]), left, right)
+		result[name] = centers[choice].reshape(param.shape).astype(param.dtype)
+	return result
 
-'Compress weights given a codebook.'
+
 def compress_weights_with_codebook(model_state, clusters, labels, to_numpy=True, to_cpu=True):
-	# Ensure a numpy dictinary is provided
-	if to_numpy:
-		model_state = {k: v.cpu().numpy() if to_cpu else v.numpy() for k, v in model_state.items()}
-	# Assign cluster centers to model weights
-	start_index = 0
-	for name, param in model_state.items():
-		_shape = param.shape
-		w = param.reshape(-1, 1)
-		for i in range(len(w)):
-			w[i] = clusters[labels[start_index]]
-			start_index += 1
-		model_state[name] = w.reshape(_shape).astype(float)
-	return model_state
+	if to_numpy: model_state = {k:v.detach().cpu().numpy() for k,v in model_state.items()}
+	return unpack_calibration(pack_calibration(model_state, clusters, labels))
 
 class _FedAvg(fl.server.strategy.FedAvg):
 
@@ -69,6 +64,7 @@ class _FedAvg(fl.server.strategy.FedAvg):
 		# New params
 		self.model_state = init_state
 		self.num_clusters = num_clusters
+		self.initialized_clients = set()
 
 	'FedAvg aggregation.'
 	@staticmethod
@@ -90,38 +86,23 @@ class _FedAvg(fl.server.strategy.FedAvg):
 		return (weights, model_state)
 
 	def configure_fit(self, server_round, parameters, client_manager):
-
-		# Custom config function
-		config = {}
-		if self.on_fit_config_fn is not None:
-			config = self.on_fit_config_fn(server_round)
-
-		# Convert model parameters to numpy arrays
-		parameters = fl.common.parameters_to_ndarrays(parameters)
-
-		# Compute codebook
-		print(f"[Server] - Broadcasting {'sorted clusters' if config['broadcast_clusters'] else 'compressed weights'}.")
-		weights = np.concatenate([p.flatten() for p in parameters]).reshape(-1, 1).astype(float)
-		(clusters, labels) = apply_kmeans(weights=weights, num_clusters=self.num_clusters)
-
-		if config['broadcast_clusters']: # Prepape codebook to send
-			parameters = np.sort(clusters.flatten())
-		else: # Prepare compressed weights to send
-			parameters = np.array([v for _,v in \
-				compress_weights_with_codebook(
-					model_state=dict(zip(self.model_state.keys(), parameters)),
-					clusters=clusters, labels=labels, to_numpy=False).items()
-			], dtype=object)
-
-		parameters = fl.common.ndarrays_to_parameters(parameters)
-		fit_ins = fl.common.FitIns(parameters, config)
-
-		# Sample clients
-		sample_size, min_num_clients = self.num_fit_clients(client_manager.num_available())
-		clients = client_manager.sample(num_clients=sample_size, min_num_clients=min_num_clients)
-
-		# Return client/config pairs
-		return [(client, fit_ins) for client in clients]
+		config = dict(self.on_fit_config_fn(server_round) if self.on_fit_config_fn else {})
+		arrays = fl.common.parameters_to_ndarrays(parameters)
+		state = collections.OrderedDict(zip(self.model_state.keys(), arrays))
+		clusters, labels = apply_kmeans(floating_weights(state), self.num_clusters)
+		calibration = pack_calibration(state, clusters, labels)
+		sample_size, minimum = self.num_fit_clients(client_manager.num_available())
+		clients = client_manager.sample(num_clients=sample_size, min_num_clients=minimum)
+		instructions = []
+		for client in clients:
+			client_config = dict(config)
+			# A late first participant has no local weight arrangement yet.
+			cold_start = str(client.cid) not in self.initialized_clients
+			client_config['broadcast_clusters'] = bool(config['broadcast_clusters'] and not cold_start)
+			client_config['cold_start_calibration'] = cold_start
+			payload = [np.sort(clusters.reshape(-1))] if client_config['broadcast_clusters'] else calibration
+			instructions.append((client,fl.common.FitIns(fl.common.ndarrays_to_parameters(payload),client_config)))
+		return instructions
 
 	def aggregate_fit(self, server_round, results, failures,):
 
@@ -130,21 +111,22 @@ class _FedAvg(fl.server.strategy.FedAvg):
 		if not self.accept_failures and failures:
 			return None, {}
 
-        # Convert results
-		weights_results = [(fl.common.parameters_to_ndarrays(fit_res.parameters),\
-			fit_res.num_examples) for _, fit_res in results]
-
-		# Check type of aggregation
-		received_compressed_weights = all([res.metrics['send_compressed_weights']==1 for _,res in results])
-		print("[Server] - Global weights aggregation via " +\
-			f"{'compressed weights' if received_compressed_weights else 'clients clusters.'}.")
-
-		if received_compressed_weights: # Standard FedAvg
+		calibration_flags = {bool(res.metrics['send_compressed_weights']) for _,res in results}
+		if len(calibration_flags) != 1: raise ValueError('Mixed uplink calibration modes in one round')
+		received_compressed_weights = calibration_flags.pop()
+		weights_results = []
+		for proxy, res in results:
+			payload = fl.common.parameters_to_ndarrays(res.parameters)
+			weights = list(unpack_calibration(payload).values()) if received_compressed_weights else payload
+			weights_results.append((weights, res.num_examples))
+			self.initialized_clients.add(str(proxy.cid))
+		if received_compressed_weights:
 			parameters_aggregated = __class__.aggregate(weights_results)
-			self.model_state = {k: v for k,v in zip(self.model_state.keys(),parameters_aggregated)}
-		else: # Aggregate codebooks
-			(parameters_aggregated, self.model_state) = \
-				__class__.aggregate_clusters(weights_results, model_state=self.model_state)
+			self.model_state = collections.OrderedDict((k,np.asarray(v,dtype=self.model_state[k].dtype))
+				for k,v in zip(self.model_state,parameters_aggregated))
+			parameters_aggregated = list(self.model_state.values())
+		else:
+			parameters_aggregated, self.model_state = __class__.aggregate_clusters(weights_results,self.model_state)
 
 		parameters_aggregated = fl.common.ndarrays_to_parameters(parameters_aggregated)
 
@@ -182,7 +164,7 @@ class Client(fl.client.NumPyClient):
 			params_dict = model_state_from_aggregated_clusters(
 				model_state={k: v.cpu().numpy() for k, v in model_state.items()}, clusters=parameters)
 		else: # Extract parameters directly.
-			params_dict = {k: v for k,v in zip(self.model.state_dict().keys(), parameters)}
+			params_dict = unpack_calibration(parameters) if is_calibration(parameters) else {k:v for k,v in zip(self.model.state_dict(),parameters)}
 
 		# Load parameters
 		state_dict = collections.OrderedDict({k: torch.tensor(v) for k, v in params_dict.items()})
@@ -192,33 +174,23 @@ class Client(fl.client.NumPyClient):
 		self.optimizer = torch.optim.Adam(self.model.parameters(), lr=config['lr'])
 		self.metric = torchmetrics.Accuracy(task='multiclass', num_classes=self.num_classes).to(self.device)
 
-	def get_parameters(self, config={}):
+	def get_parameters(self, config=None):
+		return [v.detach().cpu().numpy() for v in self.model.state_dict().values()]
 
-		# Compute new clusters
-		model_state = self.model.state_dict()
-		weights = np.concatenate([p.cpu().numpy().flatten() for _,p in model_state.items()]).reshape(-1, 1).astype('double')
-		(clusters,labels) = apply_kmeans(weights=weights, num_clusters=int(config['num_clusters']))
-
-		# Update model with compressed weights
-		params_dict = compress_weights_with_codebook(model_state=model_state, clusters=clusters, labels=labels, to_cpu=True)
-		state_dict = collections.OrderedDict({k: torch.tensor(v) for k, v in params_dict.items()})
-		self.model.load_state_dict(state_dict, strict=True)
-
-		# HACK: Temporary store model state for next round - This is usually stored on device.
+	def encode_update(self, config):
+		state = {k:v.detach().cpu().numpy() for k,v in self.model.state_dict().items()}
+		clusters,labels = apply_kmeans(floating_weights(state),int(config['num_clusters']))
+		compressed = compress_weights_with_codebook(state,clusters,labels,to_numpy=False)
+		self.model.load_state_dict(collections.OrderedDict((k,torch.from_numpy(v)) for k,v in compressed.items()))
 		self.store_state_to_file()
-
-		# Send only clusters
-		if not config['request_compressed_weights']:
-			return [clusters], 0 # 0: No calibration takes place
-
-		# Send compressed weights
-		return [val.cpu().numpy() for _, val in self.model.state_dict().items()], 1 # 1: Calibration round for client weights
+		if not config['request_compressed_weights']: return [clusters], 0
+		return pack_calibration(state,clusters,labels), 1
 
 	def fit(self, parameters, config):
 		self.set_parameters(parameters, config)
 		h = __class__.train(ds=self.data, model=self.model, epochs=config['epochs'],\
 			optimizer=self.optimizer, metric=self.metric, verbose=self.verbose)
-		weights, h['send_compressed_weights'] = self.get_parameters(config=config)
+		weights, h['send_compressed_weights'] = self.encode_update(config=config)
 		return weights, self.num_samples, h
 
 	def evaluate(self, parameters, config):
@@ -228,7 +200,7 @@ class Client(fl.client.NumPyClient):
 		torch.save(self.model.state_dict(), f=self.model_state_fp)
 
 	def load_state_from_file(self):
-		return torch.load(self.model_state_fp)
+		return torch.load(self.model_state_fp, map_location=self.device, weights_only=True)
 
 	@staticmethod
 	def train(ds, model, epochs, optimizer, metric, verbose=False, logger=None):
@@ -238,7 +210,9 @@ class Client(fl.client.NumPyClient):
 		criterion = torch.nn.CrossEntropyLoss()
 		score = []
 		for epoch in range(epochs):
+			metric.reset()
 			train_loss = 0.0
+			seen = 0
 			for _, (x,y) in enumerate(ds):
 				x, y = x.to(device, non_blocking=True), y.to(device, non_blocking=True).long()
 				optimizer.zero_grad()
@@ -247,10 +221,11 @@ class Client(fl.client.NumPyClient):
 				_loss = criterion(logits, y) #torch.nn.functional.nll_loss(y_prob, y)
 				_loss.backward()
 				optimizer.step()
-				train_loss += _loss.item()
+				train_loss += _loss.item() * y.numel()
+				seen += y.numel()
 				y_preds = torch.argmax(torch.nn.functional.log_softmax(logits, dim=1), dim=1)
 				metric(y_preds, y)
-			train_loss /= len(ds)
+			train_loss /= seen
 			score.append(train_loss)
 			acc = metric.compute()
 			if verbose:
@@ -258,7 +233,7 @@ class Client(fl.client.NumPyClient):
 					logger.info(f"Epoch {epoch+1}/{epochs} - Loss: {train_loss:.4f} - Accuracy: {100. * acc:.2f}%")
 				else:
 					print(f"Epoch {epoch+1}/{epochs} - Loss: {train_loss:.4f} - Accuracy: {100. * acc:.2f}%")
-		return {'loss': score, 'accuracy': float(acc.cpu().detach().numpy())}
+		return {'loss': float(score[-1]), 'accuracy': float(acc.cpu().detach().numpy())}
 
 class Server(fl.server.Server):
 
@@ -301,7 +276,7 @@ class Server(fl.server.Server):
 		init_weights = self.get_initial_parameters()
 		self.strategy = _FedAvg(
 			min_available_clients=self.num_clients, fraction_fit=self.participation,
-			min_fit_clients=int(self.participation*self.num_clients), fraction_evaluate=0.0,
+			min_fit_clients=max(1,int(self.participation*self.num_clients)), fraction_evaluate=0.0,
 			min_evaluate_clients=0, evaluate_fn=self.get_evaluation_fn(),
 			on_fit_config_fn=self.get_client_config_fn(), initial_parameters=init_weights,
 			init_state=self.init_state, num_clusters=self.num_clusters)
@@ -325,7 +300,7 @@ class Server(fl.server.Server):
 	def get_initial_parameters(self, *_):
 		if self.init_model is not None:
 			self.init_state = {k:v.cpu().numpy() for k, v in \
-				torch.load(self.init_model, map_location=self.device).state_dict().items()}
+				torch.load(self.init_model, map_location=self.device, weights_only=True).items()}
 		else:
 			self.init_state = {k : v.cpu().numpy() for k, v in \
 				self.model_loader(num_classes=self.num_classes).state_dict().items()}
@@ -357,15 +332,17 @@ class Server(fl.server.Server):
 		model.eval()
 		criterion = torch.nn.CrossEntropyLoss()
 		test_loss = 0.0
+		seen = 0
 		with torch.no_grad():
 			for _, (x, y) in enumerate(ds):
 				x, y = x.to(device, non_blocking=True), y.to(device, non_blocking=True).long()
 				logits = model(x)
 				#y_prob = torch.nn.functional.log_softmax(logits, dim=1)
-				test_loss += criterion(logits, y).item() #torch.nn.functional.nll_loss(y_prob, y).item()
+				test_loss += criterion(logits, y).item() * y.numel()
+				seen += y.numel() # #torch.nn.functional.nll_loss(y_prob, y).item()
 				y_preds = torch.argmax(torch.nn.functional.log_softmax(logits, dim=1), dim=1)
 				metric(y_preds, y)
-		test_loss /= len(ds)
+		test_loss /= seen
 		acc = metric.compute()
 		if verbose:
 			if logger is not None:

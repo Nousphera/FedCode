@@ -3,25 +3,31 @@ import numpy as np
 def create_iid_shards(idxs, num_shards, num_samples, num_classes, seed=42):
 	np.random.seed(seed)
 	data_distribution = np.random.choice(a=np.arange(0,num_shards), size=num_samples).astype(int)
-	return {id:list(np.squeeze(np.argwhere((np.squeeze([data_distribution==id])==True)))) for id in range(num_shards)}
+	return {id:np.flatnonzero(data_distribution==id).tolist() for id in range(num_shards)}
 
 def create_imbalanced_shards(idxs, num_shards, num_samples, num_classes, skewness=0.8, seed=42):
 	np.random.seed(seed)
 	data_distribution = np.random.choice(a=np.arange(0,num_shards), size=num_samples, p=np.random.dirichlet(np.repeat(skewness, num_shards))).astype(int)
-	return {id:list(np.squeeze(np.argwhere((np.squeeze([data_distribution==id])==True)))) for id in range(num_shards)}
+	return {id:np.flatnonzero(data_distribution==id).tolist() for id in range(num_shards)}
 
 def create_noniid_shards(idxs, num_shards, num_samples, num_classes, skewness=2.0, seed=42,):
 	np.random.seed(seed)
 	partitions = {}
 	min_size = 0
 	min_require_size = 10
+	if num_samples < min_require_size * num_shards or skewness <= 0:
+		raise ValueError('Non-IID partition requires >=10 samples per client and positive concentration')
+	attempts = 0
 	while min_size < min_require_size:
+		attempts += 1
+		if attempts > 1000: raise ValueError('Could not construct a nonempty Dirichlet partition; change seed or concentration')
 		idx_batch = [[] for _ in range(num_shards)]
 		for k in range(num_classes):
 			idx_k = np.where(idxs==k)[0]
 			np.random.shuffle(idx_k)
 			proportions = np.random.dirichlet(np.repeat(skewness, num_shards))
 			proportions = np.array([p * (len(idx_j) < num_samples / num_shards) for p, idx_j in zip(proportions, idx_batch)])
+			if proportions.sum() == 0: proportions = np.ones(num_shards)
 			proportions = proportions / proportions.sum()
 			proportions = (np.cumsum(proportions) * len(idx_k)).astype(int)[:-1]
 			idx_batch = [idx_j + idx.tolist() for idx_j, idx in zip(idx_batch, np.split(idx_k, proportions))]

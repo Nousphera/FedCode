@@ -1,4 +1,4 @@
-from models.resnet20 import ResNet as resnet_model
+from models.resnet20 import ResNet20 as resnet_model
 from models.mobilenetv2 import MobileNetV2 as mobilenetv2_model
 from models.yamnet import YAMNet as yamnet_model
 

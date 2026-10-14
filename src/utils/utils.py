@@ -1,4 +1,5 @@
 import GPUtil
+import time
 import numpy as np
 import argparse
 
@@ -9,7 +10,7 @@ def set_seed(seed=42):
 	torch.cuda.manual_seed_all(seed)
 	np.random.seed(seed)
 	torch.backends.cudnn.deterministic = True
-	torch.backends.cudnn.benchmark = True
+	torch.backends.cudnn.benchmark = False
 
 def str2bool(v):
 	if isinstance(v, bool):
@@ -27,6 +28,7 @@ def none_or_str(value):
     return value
 
 def grab_gpu(memory_limit=0.91):
+	if not GPUtil.getGPUs(): raise RuntimeError("No NVIDIA GPU detected; use the maintained CPU runner")
 	while len(GPUtil.getAvailable(order='memory', limit=len(GPUtil.getGPUs()), maxLoad=1.0, maxMemory=memory_limit)) == 0: time.sleep(1)
 	cuda_device_ids = GPUtil.getAvailable(order='memory', limit=len(GPUtil.getGPUs()), maxLoad=1.0, maxMemory=memory_limit)
 	cuda_device_ids.extend("") # Fix no gpu issue

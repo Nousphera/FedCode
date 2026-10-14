@@ -32,7 +32,7 @@ def get_cifar10_dataset(split_fn=None, id=0, num_shards=1, return_eval_ds=False,
 
 	if return_eval_ds:
 		ds_test = torch.utils.data.DataLoader(ds_test, batch_size=batch_size, shuffle=False)
-		return ds_test, num_classes, len(ds_test)
+		return ds_test, num_classes, len(ds_test.dataset)
 
 	# Split per client
 	samples_idxs = split_fn(idxs=samples_idxs, num_shards=num_shards,
@@ -67,7 +67,7 @@ def get_cifar100_dataset(split_fn=None, id=0, num_shards=1, return_eval_ds=False
 
 	if return_eval_ds:
 		ds_test = torch.utils.data.DataLoader(ds_test, batch_size=batch_size, shuffle=False)
-		return ds_test, num_classes, len(ds_test)
+		return ds_test, num_classes, len(ds_test.dataset)
 
 	# Split per client
 	samples_idxs = split_fn(idxs=samples_idxs, num_shards=num_shards,

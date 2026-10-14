@@ -72,12 +72,12 @@ def get_spcm_dataset(split_fn=None, id=0, num_shards=1, return_eval_ds=False, ba
 
 	# Get dataset info
 	samples_idxs = np.array(ds_train.targets) #np.array([__CLASSES__[train_ds.get_metadata(i)[2]] for i in range(len(train_ds))])
-	num_classes = len(np.unique(samples_idxs))
+	num_classes = 12
 	#print(ds_train.make_weights_for_balanced_classes())
 
 	if return_eval_ds:
 		ds_test = torch.utils.data.DataLoader(ds_test, batch_size=batch_size, shuffle=False)
-		return ds_test, num_classes, len(ds_test)
+		return ds_test, num_classes, len(ds_test.dataset)
 
 	# Split per client
 	samples_idxs = split_fn(idxs=samples_idxs, num_shards=num_shards,

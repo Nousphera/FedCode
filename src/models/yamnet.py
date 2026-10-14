@@ -1,3 +1,5 @@
+# Architecture adapted from https://github.com/w-hc/torch_audioset
+# Copyright/license attribution: ../../licenses/torch_audioset-MIT.txt and NOTICE.
 import torch
 
 CKPT_URL = "https://github.com/w-hc/torch_audioset/releases/download/v0.1/yamnet.pth"
@@ -13,8 +15,7 @@ class Conv2d_tf(torch.nn.Conv2d):
 		self.forward_func = lambda input, padding: torch.nn.functional.conv2d(input, self.weight, self.bias, self.stride, padding=padding, dilation=self.dilation, groups=self.groups,)
 
 	def tf_SAME_padding(self, input, dim):
-		print(input.size(0), input.size(1), input.size(2))
-		input_size = input.size(dim)
+		input_size = input.size(dim + 2)
 		filter_size = self.kernel_size[dim]
 		dilate = self.dilation
 		dilate = dilate if isinstance(dilate, int) else dilate[dim]
@@ -104,15 +105,15 @@ class YAMNet(torch.nn.Module):
 		return self.__class__.__name__
 
 	def forward(self, x):
-		for module in self.children(): x = module(x)
+		for name, module in self.named_children():
+			if name != 'classifier': x = module(x)
 		x = torch.nn.functional.adaptive_avg_pool2d(x, 1)
 		x = x.reshape(x.shape[0], -1)
-		print(x.shape)
 		x = self.classifier(x)
 		return x
 
 
-from torchinfo import summary
 if __name__ == "__main__":
+	from torchinfo import summary
 	model = YAMNet(num_classes=11, pretrained=True)
 	summary(model, input_shape=(32,96,64,1))

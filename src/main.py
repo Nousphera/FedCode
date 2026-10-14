@@ -2,14 +2,12 @@ import os, sys; sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(
 import argparse
 import time
 import shutil
+import tempfile
 import flwr as fl
 PROJECT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 from utils.utils import (str2bool, none_or_str)
 os.environ['CUDA_DEVICE_ORDER']="PCI_BUS_ID"
 os.environ['TORCH_DATA_DIR'] = f'{PROJECT_DIR}/data/torch_datasets/'
-if os.path.isdir(f'{PROJECT_DIR}/tmp'): shutil.rmtree(f'{PROJECT_DIR}/tmp')
-os.makedirs(f'{PROJECT_DIR}/tmp/', exist_ok=True)
-os.makedirs(f'{PROJECT_DIR}/assets/', exist_ok=True)
 
 parser = argparse.ArgumentParser(description='Federated Training with Transferring Codebooks')
 parser.add_argument('--model', 						type=str, 			default='mobilenet', 						help='Model name (default: mobilenet)')
@@ -39,7 +37,7 @@ def create_client(cid):
 	import os, sys; sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 	from utils.utils import (grab_gpu, set_seed)
 	time.sleep(int(cid)*0.75)
-	os.environ['CUDA_VISIBLE_DEVICES'] = grab_gpu()
+	os.environ['CUDA_VISIBLE_DEVICES'] = grab_gpu() if args.device != 'cpu' else '-1'
 	set_seed(args.seed)
 	import warnings
 	warnings.simplefilter("ignore")
@@ -54,12 +52,12 @@ def create_client(cid):
 		split_fn=get_split_fn(args.split),
 		batch_size=args.batch_size, seed=args.seed,
 		device=args.device, verbose=False,
-		temp_dir=f'{PROJECT_DIR}/tmp/'
+		temp_dir=args.temp_dir
 	)
 
 def create_server(args_msg):
 	from utils.utils import (grab_gpu, set_seed)
-	os.environ['CUDA_VISIBLE_DEVICES'] = grab_gpu()
+	os.environ['CUDA_VISIBLE_DEVICES'] = grab_gpu() if args.device != 'cpu' else '-1'
 	set_seed(args.seed)
 	import warnings
 	warnings.simplefilter("ignore")
@@ -81,18 +79,20 @@ def create_server(args_msg):
 	)
 
 def main(args_msg):
-	# Create server
-	server = create_server(args_msg)
-	# Start simulation
-	history = fl.simulation.start_simulation(
-		client_fn=create_client, server=server, num_clients=args.num_clients,
-		ray_init_args= {
-			"ignore_reinit_error": True,
-			"num_cpus": int(min(args.max_parallel_executions, args.num_clients)),
-		},
-		config=fl.server.ServerConfig(num_rounds=args.num_rounds, round_timeout=args.timeout),)
-	shutil.rmtree(f'{PROJECT_DIR}/tmp/')
-	return history
+	os.makedirs(args.store_dir, exist_ok=True)
+	with tempfile.TemporaryDirectory(prefix='fedcode-') as cache:
+		args.temp_dir = cache
+		# Create server
+		server = create_server(args_msg)
+		# Start simulation
+		history = fl.simulation.start_simulation(
+			client_fn=create_client, server=server, num_clients=args.num_clients,
+			ray_init_args= {
+				"ignore_reinit_error": True,
+				"num_cpus": int(min(args.max_parallel_executions, args.num_clients)),
+			},
+			config=fl.server.ServerConfig(num_rounds=args.num_rounds, round_timeout=args.timeout),)
+		return history
 
 if __name__ == "__main__":
 	parsed_args = 'Parameters:\n ' + ' '.join(f'{k}={v}\n' for k, v in vars(args).items())
