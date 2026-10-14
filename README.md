@@ -1,60 +1,73 @@
-# FedCode: Communication-Efficient Federated Learning via Transferring Codebooks
+# FedCode
 
-FedCode communicates model-wide weight-clustering centers in most federated
-rounds and periodically transfers assignment indices to calibrate local/global
-models. Codebook rounds retain weight positions; calibration rounds reconstruct
-client models for FedAvg.
+**FedCode: Communication-Efficient Federated Learning via Transferring Codebooks**
+[Paper](https://arxiv.org/abs/2311.09270) · [Project page](https://nousphera.github.io/FedCode/) · [Code](https://github.com/Nousphera/FedCode) · [Source provenance](PROVENANCE.md)
 
-[Paper](https://arxiv.org/abs/2311.09270) · [Provenance](PROVENANCE.md) · [Method and reproduction notes](docs/REPRODUCIBILITY.md)
+## Abstract
 
-<img src=./img/overview.png width=75%/>
+Federated Learning (FL) is a distributed machine learning paradigm that enables learning models from decentralized local data. While FL offers appealing properties for clients' data privacy, it imposes high communication burdens for exchanging model weights between a server and the clients. Existing approaches rely on model compression techniques, such as pruning and weight clustering to tackle this. However, transmitting the entire set of weight updates at each federated round, even in a compressed format, limits the potential for a substantial reduction in communication volume. We propose FedCode where clients transmit only codebooks, i.e., the cluster centers of updated model weight values. To ensure a smooth learning curve and proper calibration of clusters between the server and the clients, FedCode periodically transfers model weights after multiple rounds of solely communicating codebooks. This results in a significant reduction in communication volume between clients and the server in both directions, without imposing significant computational overhead on the clients or leading to major performance degradation of the models. We evaluate the effectiveness of FedCode using various publicly available datasets with ResNet-20 and MobileNet backbone model architectures. Our evaluations demonstrate a 12.2-fold data transmission reduction on average while maintaining a comparable model performance with an average accuracy loss of 1.3% compared to FedAvg. Further validation of FedCode performance under non-IID data distributions showcased an average accuracy loss of 2.0% compared to FedAvg while achieving approximately a 12.7-fold data transmission reduction.
 
-## Quick start
+*The abstract describes the published work. The maintained release has not reproduced its benchmark tables.*
+
+## Setup
+
+Use Python 3.11. The commands below create a dedicated virtual environment.
 
 ```bash
+mkdir -p "$HOME/research-code" "$HOME/.venvs"
+cd "$HOME/research-code"
 git clone https://github.com/Nousphera/FedCode.git
 cd FedCode
-python3.11 -m venv .venv
-source .venv/bin/activate
+python3.11 -m venv "$HOME/.venvs/fedcode"
+source "$HOME/.venvs/fedcode/bin/activate"
 python -m pip install -r requirements.txt
-python train.py --dataset synthetic --clients 2 --rounds 3 --epochs 1 \
-  --batch-size 8 --clusters 4 --start-round 1 --broadcast-rate 3 \
-  --request-rate 2 --output runs/smoke
 python -m pytest -q
 ```
 
-The maintained CPU runner uses the original method with stock Flower
-serialization and bit-packed calibration indices. It records actual message
-bytes, communication modes, configuration and model checkpoints. The small
-synthetic fixture tests execution; it does not reproduce paper accuracy or DTR.
+## Datasets
 
-Use `--dataset cifar10` or `cifar100` for torchvision data, and `--model resnet20`
-or `mobilenet`. The original audio path is available as `--dataset spcm
---model yamnet`; see the documented silence/balancing limitation before using it
-as a paper benchmark. [Reproduction notes](docs/REPRODUCIBILITY.md) explain
-settings, repairs, partial participation and remaining data/protocol limits.
-[Validation](docs/VALIDATION.md) records the actual checks.
+```bash
+python scripts/prepare_data.py --dataset cifar10 --root datasets --download
+python scripts/prepare_data.py --dataset cifar10 --root datasets --validate
+```
 
-Original Ray orchestration is retained in `src/main.py`, and historical pins
-in `requirements-legacy.txt`. [MIT license](LICENSE); architecture-specific
-MIT/BSD notices are preserved in [NOTICE](NOTICE) and `licenses/`.
+Use `cifar100` for CIFAR-100. Speech Commands v2 uses the original audio path;
+[dataset setup](docs/DATA_SETUP.md) describes acquisition, validation, the
+12-class mapping and the missing historical silence/balancing recipe. Prepared
+NPZ imports are accepted by the actual trainer, with fixed dataset class counts.
 
-# References
+## Run
 
-If you find this work useful in your research, please consider citing our paper:
+```bash
+python train.py --dataset synthetic --clients 2 --rounds 3 --epochs 1 \
+  --batch-size 8 --clusters 4 --start-round 1 --broadcast-rate 3 \
+  --request-rate 2 --output runs/smoke
+python train.py --dataset cifar10 --data-root datasets --model resnet20 \
+  --clients 10 --rounds 60 --epochs 4 --batch-size 128 --lr .001 \
+  --clusters 64 --split noniid --alpha 10 --participation 1 --start-round 2 \
+  --broadcast-rate 5 --request-rate 2 --seed 42 --output runs/cifar10-resnet
+```
 
-<pre>@misc{khalilian2023fedcode,
-      title={FedCode: Communication-Efficient Federated Learning via Transferring Codebooks}, 
-      author={Saeed Khalilian and Vasileios Tsouvalas and Tanir Ozcelebi and Nirvana Meratnia},
-      year={2023},
-      eprint={2311.09270},
-      archivePrefix={arXiv},
-      primaryClass={cs.LG}
-}
-</pre>
-<!-- nousphera-project-resources -->
-## Project resources
+This maintained runner is sequential and uses stock Flower protobufs for
+communication accounting. It is not a Flower App. The native algorithm retains
+client weights by stable identity between codebook and calibration rounds.
+Use `--model mobilenet` for MobileNet, or `--dataset spcm --model yamnet` for audio.
+[Reproduction notes](docs/REPRODUCIBILITY.md) explain paper budgets, partial
+participation, communication modes and the source's F1/F2 convention.
 
-[Project page](https://nousphera.github.io/FedCode/) · [Research overview](https://nousphera.github.io/projects/fedcode/) · [A0 poster](https://nousphera.github.io/FedCode/poster.pdf) · [Paper](https://arxiv.org/abs/2311.09270)
+## Outputs and reproducibility
 
-This repository contains the research implementation. The project page and poster summarize the published method and reported experiments; this documentation update does not claim an independent reproduction of those experiments.
+`results.json` records configuration, actual protobuf byte counts and each
+round's communication mode; `model-state.pt` and `final-parameters.npz` store
+final weights, and `training.log` contains the run log. Private client caches are
+removed on completion. Checkpoints do not contain all optimizer/client state.
+[Validation](docs/VALIDATION.md) documents maintained checks and unverified
+paper accuracy/DTR claims.
+
+## Citation
+
+Use [CITATION.cff](CITATION.cff) or [citation.bib](citation.bib).
+
+## License
+
+[MIT](LICENSE), with architecture-specific MIT/BSD notices in [NOTICE](NOTICE) and `licenses/`.

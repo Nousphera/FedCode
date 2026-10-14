@@ -35,3 +35,16 @@ Generated images/waveforms validate execution and protocol behavior only.
 No real-data accuracy, published communication ratio, full SpeechCommands
 protocol, CUDA execution, distributed Ray execution or paper table has been
 reproduced by these checks.
+
+
+## Setup and native execution follow-up
+
+The final Python 3.11 CPU suite passed **16 tests**. Added checks cover
+prepared NPZ import/validation, wrong image shape/labels, no overwrite, content
+tampering, safe tar extraction and data-loader consumption. Public corpora were
+not downloaded in this check; generated source NPZ files were prepared with the
+public CLI and consumed by actual training. No benchmark result is inferred.
+
+The generated CIFAR fixture trained for two rounds through the maintained
+codebook/calibration runner, retaining 40 training examples across clients.
+A generated Speech Commands tree additionally validates WAV headers and splits.

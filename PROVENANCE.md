@@ -24,3 +24,15 @@ license texts and attribution have been restored under `licenses/` and NOTICE:
 These are inspected attribution references; they do not establish the exact
 historical commits originally copied into FedCode. No pretrained weights from
 these projects are bundled or downloaded by the synthetic checks.
+
+
+## Reproducible setup follow-up
+
+Added dataset import/download/validation commands and deterministic file manifests.
+Prepared NPZ files feed the maintained trainer directly. Image labels and shapes
+are validated against fixed dataset class spaces; explicit dataset imports do not
+certify historical order, partitions or benchmark equivalence. Existing source,
+teacher identity and cache qualifications are retained in the linked guides.
+
+The primary runner remains sequential; standard Flower message serialization
+is not represented as a Flower App or a distributed execution claim.

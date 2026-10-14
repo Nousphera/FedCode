@@ -2,6 +2,19 @@ import os
 import torch
 import torchvision
 import numpy as np
+
+from pathlib import Path
+from prepared_arrays import image_dataset
+
+
+def prepared_cifar(name, root, train=True, download=False, transform=None):
+    path = Path(os.environ['TORCH_DATA_DIR']) / (name + '.npz')
+    if path.exists():
+        return image_dataset(path, name, train, transform)
+    loader = torchvision.datasets.CIFAR10 if name == 'cifar10' else torchvision.datasets.CIFAR100
+    return loader(root, train=train, download=download, transform=transform)
+
+
 import contextlib
 
 def get_cifar10_dataset(split_fn=None, id=0, num_shards=1, return_eval_ds=False,
@@ -16,7 +29,7 @@ def get_cifar10_dataset(split_fn=None, id=0, num_shards=1, return_eval_ds=False,
 			torchvision.transforms.Normalize(mean=[0.4914, 0.4822, 0.4465],std=[0.2023, 0.1994, 0.2010]),
 	])
 	with contextlib.redirect_stdout(None):
-		ds_train = torchvision.datasets.CIFAR10(os.path.join(os.environ['TORCH_DATA_DIR'],'cifar10'),
+		ds_train = prepared_cifar("cifar10", os.path.join(os.environ['TORCH_DATA_DIR'],'cifar10'),
 						train=True, download=True, transform=train_prep)
 	# Prepare test data
 	test_prep = torchvision.transforms.Compose([
@@ -24,11 +37,11 @@ def get_cifar10_dataset(split_fn=None, id=0, num_shards=1, return_eval_ds=False,
 			torchvision.transforms.Normalize(mean=[0.4914, 0.4822, 0.4465],std=[0.2023, 0.1994, 0.2010]),
 	])
 	with contextlib.redirect_stdout(None):
-		ds_test = torchvision.datasets.CIFAR10(os.path.join(os.environ['TORCH_DATA_DIR'],'cifar10'),
+		ds_test = prepared_cifar("cifar10", os.path.join(os.environ['TORCH_DATA_DIR'],'cifar10'),
 						train=False, download=True, transform=test_prep)
 	# Get dataset info
 	samples_idxs = np.array(ds_train.targets)
-	num_classes = len(np.unique(samples_idxs))
+	num_classes = 10
 
 	if return_eval_ds:
 		ds_test = torch.utils.data.DataLoader(ds_test, batch_size=batch_size, shuffle=False)
@@ -52,18 +65,18 @@ def get_cifar100_dataset(split_fn=None, id=0, num_shards=1, return_eval_ds=False
 		torchvision.transforms.ToTensor(),
 		torchvision.transforms.Normalize(mean=[0.4914, 0.4822, 0.4465],std=[0.2023, 0.1994, 0.2010]),])
 	with contextlib.redirect_stdout(None):
-		ds_train = torchvision.datasets.CIFAR100(os.path.join(os.environ['TORCH_DATA_DIR'],'cifar100'),
+		ds_train = prepared_cifar("cifar100", os.path.join(os.environ['TORCH_DATA_DIR'],'cifar100'),
 						train=True, download=True, transform=train_prep)
 	# Prepare test data
 	test_prep = torchvision.transforms.Compose([
 		torchvision.transforms.ToTensor(),
 		torchvision.transforms.Normalize(mean=[0.4914, 0.4822, 0.4465],std=[0.2023, 0.1994, 0.2010]),])
 	with contextlib.redirect_stdout(None):
-		ds_test = torchvision.datasets.CIFAR100(os.path.join(os.environ['TORCH_DATA_DIR'],'cifar100'),
+		ds_test = prepared_cifar("cifar100", os.path.join(os.environ['TORCH_DATA_DIR'],'cifar100'),
 						train=False, download=True, transform=test_prep)
 	# Get dataset info
 	samples_idxs = np.array(ds_train.targets)
-	num_classes = len(np.unique(samples_idxs))
+	num_classes = 100
 
 	if return_eval_ds:
 		ds_test = torch.utils.data.DataLoader(ds_test, batch_size=batch_size, shuffle=False)
