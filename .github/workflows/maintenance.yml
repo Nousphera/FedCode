@@ -1,4 +1,4 @@
-name: Maintenance checks
+name: Source Checks
 
 on:
   push:
@@ -9,21 +9,94 @@ permissions:
   contents: read
 
 jobs:
-  checks:
+  pytorch-flower:
     runs-on: ubuntu-latest
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-          fetch-depth: 2
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
-          python-version: '3.11'
-      - name: Install maintained dependencies
-        run: python -m pip install -r requirements.txt
-      - name: Compile Python sources
-        run: python -m compileall -q src tests train.py
-      - name: Run regression and CPU training tests
-        run: python -m pytest -q
-      - name: Check whitespace
+          python-version: '3.12'
+      - name: Install Source
+        run: |
+          python -m pip install torch==2.8.0 torchvision==0.23.0 --index-url https://download.pytorch.org/whl/cpu
+          python -m pip install -r requirements.txt
+          python -m pip check
+          python -m compileall -q src/fedcode scripts
+      - name: Prepare Official CIFAR-10
+        run: python scripts/prepare_data.py --dataset cifar10
+      - name: Check Native Flower Methods
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          import subprocess
+          import textwrap
+          import tomli_w
+          import torch
+          from fedcode.experiment import parser, build_config, flower_app, flower_command
+          from fedcode.models import make_model
+          from fedcode.codec import ModelCodec
+          from fedcode.training import numpy_state
+
+          # Shape/gradient and encoded-state checks use the complete paper models.
+          torch.set_num_threads(1)
+          for name, classes, shape in [('resnet20',10,(2,3,32,32)), ('resnet20',100,(2,3,32,32)),
+                                      ('mobilenetv2',10,(2,3,32,32)), ('mobilenetv2',100,(2,3,32,32)),
+                                      ('yamnet',12,(2,1,64,101))]:
+              model = make_model(name, classes)
+              logits = model(torch.randn(shape))
+              assert logits.shape == (2, classes) and torch.isfinite(logits).all()
+              torch.nn.functional.cross_entropy(logits, torch.tensor([0,1])).backward()
+              assert all(p.grad is not None and torch.isfinite(p.grad).all() for p in model.parameters())
+          model = make_model('resnet20',10)
+          state = numpy_state(model)
+          codec = ModelCodec(state, [n for n,p in model.named_parameters() if p.requires_grad])
+          centers, labels = codec.cluster(state, 7)
+          decoded = codec.apply(codec.calibration(state, centers, labels))
+          assert all((decoded[n] == state[n]).all() for n in codec.buffer_names)
+
+          # Only the temporary CI app shortens official data. Production preparation
+          # and training always use the complete canonical dataset.
+          fixture = textwrap.dedent('''
+          _full_load_datasets = load_datasets
+          def load_datasets(dataset, root='data'):
+              from copy import copy
+              output = []
+              for original, count in zip(_full_load_datasets(dataset, root), (2,1)):
+                  data = copy(original)
+                  ids = np.concatenate([np.flatnonzero(original.targets == label)[:count] for label in range(len(original.classes))])
+                  data.images = original.images[ids]
+                  data.labels = np.asarray(original.labels[ids])
+                  data.targets = data.labels
+                  output.append(data)
+              return tuple(output)
+          ''')
+          root = Path(os.environ['RUNNER_TEMP']) / 'fedcode-checks'
+          root.mkdir()
+          for method in ('fedcode','fedavg','clustered-fedavg','centralized'):
+              args = parser().parse_args(['--method',method,'--nr-clients','2','--rounds','4' if method == 'fedcode' else '2',
+                  '--local-epochs','1','--batch-size','10','--num-clusters','4','--warmup-rounds','1',
+                  '--downstream-period','3','--upstream-period','2','--output',str(root / f'{method}.json')])
+              cfg = build_config(args)
+              config = root / f'{method}.toml'
+              config.write_text(tomli_w.dumps(cfg))
+              env = os.environ | {'FLWR_DISABLE_RUNTIME_DEPENDENCY_INSTALLATION':'1'}
+              with flower_app(cfg) as app:
+                  source = app / 'fedcode/data.py'
+                  source.write_text(source.read_text() + '\n' + fixture)
+                  subprocess.run(flower_command(args,cfg,config,app),check=True,env=env,timeout=300)
+              result = json.loads(Path(cfg['output']).read_text())
+              assert sum(map(len,result['partitions'])) == 20
+              assert len(result['rounds']) == cfg['num-rounds']
+              assert all(sum(map(sum,row['confusion-matrix'])) == 10 for row in result['rounds'])
+              assert Path(cfg['output']).with_suffix('.pt').is_file()
+              if method == 'fedcode':
+                  assert [r['clients'][0]['upstream'] for r in result['rounds']] == ['calibration','calibration','codebook','calibration']
+                  assert [r['clients'][0]['downstream'] for r in result['rounds']] == ['calibration','codebook','calibration','codebook']
+          PY
+      - name: Check Whitespace
         run: git show --format= --check HEAD
