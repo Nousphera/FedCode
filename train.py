@@ -119,7 +119,6 @@ def main(argv=None):
     parameters = server.strategy.initial_parameters
     report = {
         "backend": "sequential-stock-flower",
-        "paper_reproduction": False,
         "config": {
             k: str(v) if isinstance(v, Path) else v for k, v in vars(args).items()
         },
