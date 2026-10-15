@@ -88,3 +88,79 @@ def test_speechcommands_fixture_validates_real_wave_headers_and_splits(tmp_path)
         output.writeframes(np.zeros(8000, np.int16).tobytes())
     with pytest.raises(ValueError, match="16 kHz"):
         prep.main([*args, "--validate"])
+
+
+def test_existing_manifest_cannot_leave_a_half_published_array(tmp_path):
+    source = tmp_path / "input.npz"
+    fixture(source)
+    target = tmp_path / "prepared"
+    target.mkdir()
+    saved = target / "cifar10.manifest.json"
+    saved.write_text('{"existing":true}')
+    with pytest.raises((ValueError, FileExistsError)):
+        prep.main(["--dataset", "cifar10", "--source", str(source), "--root", str(target)])
+    assert not (target / "cifar10.npz").exists()
+    assert saved.read_text() == '{"existing":true}'
+
+
+def test_speechcommands_rejects_truncated_pcm_payload(tmp_path):
+    import wave
+    root = tmp_path / "audio"
+    directory = root / "spcm/speech_commands_v0.02/yes"
+    directory.mkdir(parents=True)
+    for i in range(3):
+        path = directory / f"fixture_nohash_{i}.wav"
+        with wave.open(str(path), "wb") as output:
+            output.setnchannels(1); output.setsampwidth(2); output.setframerate(16000)
+            output.writeframes(np.zeros(16000, np.int16).tobytes())
+    (directory.parent / "validation_list.txt").write_text("yes/fixture_nohash_1.wav\n")
+    (directory.parent / "testing_list.txt").write_text("yes/fixture_nohash_2.wav\n")
+    path.write_bytes(path.read_bytes()[:-100])
+    with pytest.raises(ValueError, match="truncated|payload"):
+        prep.main(["--dataset", "spcm", "--root", str(root)])
+
+
+def test_array_publication_failure_rolls_back_both_files(tmp_path, monkeypatch):
+    source = tmp_path / "input.npz"
+    fixture(source)
+    target = tmp_path / "prepared"
+    real_link = prep.os.link
+    calls = []
+    def fail_manifest(source, destination):
+        calls.append(destination)
+        if str(destination).endswith(".manifest.json"):
+            raise OSError("publication failed")
+        return real_link(source, destination)
+    monkeypatch.setattr(prep.os, "link", fail_manifest)
+    with pytest.raises(OSError, match="publication failed"):
+        prep.main(["--dataset", "cifar10", "--source", str(source), "--root", str(target)])
+    assert len(calls) == 2
+    assert not (target / "cifar10.npz").exists()
+    assert not (target / "cifar10.manifest.json").exists()
+    assert not list(target.glob(".prepare-*"))
+
+
+def test_speechcommands_import_validate_and_actual_reader(tmp_path, monkeypatch):
+    import json
+    import wave
+    from datasets.spcm import get_spcm_dataset
+    source = tmp_path / 'source'
+    directory = source / 'spcm/speech_commands_v0.02/yes'
+    directory.mkdir(parents=True)
+    for index in range(3):
+        with wave.open(str(directory / f'fixture_nohash_{index}.wav'), 'wb') as output:
+            output.setnchannels(1); output.setsampwidth(2); output.setframerate(16000)
+            output.writeframes(np.zeros(16000, np.int16).tobytes())
+    (directory.parent / 'validation_list.txt').write_text('yes/fixture_nohash_1.wav\n')
+    (directory.parent / 'testing_list.txt').write_text('yes/fixture_nohash_2.wav\n')
+    (source / 'unrelated-private.txt').write_text('not training input')
+    target = tmp_path / 'imported'
+    args = ['--dataset', 'spcm', '--root', str(target)]
+    first = prep.main([*args, '--source', str(source)])
+    assert prep.main([*args, '--validate']) == first
+    assert '.prepare-' not in json.dumps(first) and str(source) not in json.dumps(first)
+    assert not (target / 'unrelated-private.txt').exists()
+    monkeypatch.setenv('TORCH_DATA_DIR', str(target))
+    dataset, classes, count = get_spcm_dataset(return_eval_ds=True, batch_size=1)
+    assert classes == 12 and count == 1
+    assert next(iter(dataset))[0].shape[0] == 1

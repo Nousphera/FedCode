@@ -5,6 +5,8 @@ or archives. Download mode uses the public dataset library's official source.
 Existing outputs are never silently replaced. See docs/DATA_SETUP.md for sources.
 """
 import argparse
+import copy
+from contextlib import contextmanager
 import hashlib
 import json
 import os
@@ -30,6 +32,19 @@ else:
 DATASETS = ['cifar10', 'cifar100', 'spcm']
 
 
+@contextmanager
+def temporary_environment(name, value):
+    previous = os.environ.get(name)
+    os.environ[name] = str(value)
+    try:
+        yield
+    finally:
+        if previous is None:
+            os.environ.pop(name, None)
+        else:
+            os.environ[name] = previous
+
+
 def digest(path):
     h = hashlib.sha256()
     with Path(path).open("rb") as f:
@@ -50,7 +65,7 @@ def manifest(root, paths, dataset, metadata):
             "files": [{"path": str(p.relative_to(root)), "bytes": p.stat().st_size, "sha256": digest(p)} for p in sorted(paths)]}
 
 
-def record(root, name, payload, validate):
+def record(root, name, payload, validate, quiet=False):
     path = root / (name + ".manifest.json")
     if path.exists():
         previous = json.loads(path.read_text())
@@ -61,8 +76,9 @@ def record(root, name, payload, validate):
     else:
         with path.open("x") as f:
             f.write(json.dumps(payload, indent=2, sort_keys=True) + "\n")
-    print(json.dumps({"dataset": payload["dataset"], "files": len(payload["files"]),
-                      "metadata": payload["metadata"], "manifest": str(path)}, sort_keys=True))
+    if not quiet:
+        print(json.dumps({"dataset": payload["dataset"], "files": len(payload["files"]),
+                          "metadata": payload["metadata"], "manifest": str(path)}, sort_keys=True))
     return payload
 
 
@@ -73,6 +89,34 @@ def image_path(root, dataset):
 
 
 def prepare_images(args):
+    if not (args.source or args.download):
+        return _prepare_images_in_place(args)
+    base = {"cifar10n": "cifar10", "cifar100n": "cifar100"}.get(args.dataset, args.dataset)
+    target = image_path(args.root, base)
+    target_manifest = args.root / (args.dataset + ".manifest.json")
+    if target.exists() or target_manifest.exists():
+        raise FileExistsError("Data or manifest already exists; validate it or choose a new root")
+    args.root.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix=".prepare-", dir=args.root) as directory:
+        staged = copy.copy(args)
+        staged.root, staged._quiet = Path(directory), True
+        payload = _prepare_images_in_place(staged)
+        staged_data = image_path(staged.root, base)
+        staged_manifest = staged.root / (args.dataset + ".manifest.json")
+        published = []
+        try:
+            for source, destination in ((staged_data, target), (staged_manifest, target_manifest)):
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                os.link(source, destination)  # Same filesystem; exclusive atomic file publication.
+                published.append(destination)
+        except BaseException:
+            for destination in published:
+                destination.unlink()
+            raise
+    return record(args.root, args.dataset, payload, True)
+
+
+def _prepare_images_in_place(args):
     base = {"cifar10n": "cifar10", "cifar100n": "cifar100"}.get(args.dataset, args.dataset)
     path = image_path(args.root, base)
     if args.source:
@@ -103,10 +147,9 @@ def prepare_images(args):
                     shutil.copyfileobj(src, dst)
         else:
             path.parent.mkdir(parents=True, exist_ok=True)
-            # Official library download URLs and hashes; cache is private to this preparation.
+            # Official library URLs/hashes. Keras uses its standard cache; Torch uses this staging cache.
             with tempfile.TemporaryDirectory(dir=path.parent) as directory:
                 if REPOSITORY in ("FedLN", "FedCompress"):
-                    os.environ["KERAS_HOME"] = directory
                     import tensorflow as tf
                     loader = {"cifar10": tf.keras.datasets.cifar10, "cifar100": tf.keras.datasets.cifar100,
                               "fashionmnist": tf.keras.datasets.fashion_mnist}[base]
@@ -133,20 +176,52 @@ def prepare_images(args):
         from data.vision import human_annotations
         human_annotations(args.human_labels, args.human_noise_key, arrays["train_labels"].reshape(-1), args.dataset)
         metadata.update(human_labels_sha256=digest(args.human_labels), human_noise_key=args.human_noise_key)
-    return record(args.root, args.dataset, manifest(args.root, paths, args.dataset, metadata), args.validate)
+    return record(args.root, args.dataset, manifest(args.root, paths, args.dataset, metadata), args.validate, getattr(args, "_quiet", False))
 
 
 def prepare_directory(args):
-    if args.source:
-        if args.download or args.validate:
-            raise ValueError("--source cannot be combined with --download or --validate")
+    if not args.source:
+        return _prepare_directory_in_place(args)
+    if args.download or args.validate:
+        raise ValueError("--source cannot be combined with --download or --validate")
+    source = args.source.resolve(strict=True)
+    if args.root.exists():
+        raise FileExistsError("Import destination already exists; validate it or choose a new root")
+    if source == args.root or source in args.root.parents:
+        raise ValueError("Destination must not be inside the source")
+    args.root.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix=".prepare-", dir=args.root.parent) as directory:
+        staged = copy.copy(args)
+        staged.root, staged.source, staged._quiet = Path(directory) / "data", None, True
+        staged.root.mkdir()
+        if args.dataset in ("ood-images", "ood-audio"):
+            suffixes = {".wav"} if args.dataset == "ood-audio" else {".png", ".jpg", ".jpeg", ".bmp", ".gif"}
+            for path in source.rglob("*"):
+                if path.suffix.lower() not in suffixes:
+                    continue
+                if path.is_symlink():
+                    raise ValueError("Symlinks are not permitted in imported data")
+                if path.is_file():
+                    destination = staged.root / path.relative_to(source)
+                    destination.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copy2(path, destination)
+        else:
+            entry = "eurosat" if args.dataset == "eurosat" else (
+                "spcm" if REPOSITORY == "FedCode" else
+                "speech_commands" if args.dataset == "spcm" else "voxforge")
+            selected = source / entry
+            if not selected.is_dir() or selected.is_symlink():
+                raise ValueError(f"Expected prepared dataset directory: {selected}")
+            tree_files(selected)
+            shutil.copytree(selected, staged.root / entry)
+        payload = _prepare_directory_in_place(staged)
         if args.root.exists():
-            raise FileExistsError("Import destination already exists; validate it in place or choose a new root")
-        source = args.source.resolve(strict=True)
-        if source == args.root or source in args.root.parents:
-            raise ValueError("Destination must not be inside the source")
-        tree_files(source)  # reject links before copying
-        shutil.copytree(source, args.root)
+            raise FileExistsError(args.root)
+        staged.root.rename(args.root)
+    return record(args.root, args.dataset, payload, True)
+
+
+def _prepare_directory_in_place(args):
     if args.dataset == "eurosat":
         path = args.root / "eurosat/eurosat.npz"
         with np.load(path, allow_pickle=False) as data:
@@ -169,22 +244,24 @@ def prepare_directory(args):
                 with wave.open(str(path), "rb") as w:
                     if w.getframerate() != 16000 or w.getnchannels() != 1 or not w.getnframes():
                         raise ValueError("Auxiliary WAVs must be nonempty mono 16 kHz PCM")
+                    if len(w.readframes(w.getnframes())) != w.getnframes() * w.getnchannels() * w.getsampwidth():
+                        raise ValueError("Auxiliary WAV has a truncated PCM payload")
             else:
                 from PIL import Image
                 with Image.open(path) as image:
-                    image.verify()
+                    image.load()
         metadata = {"files":len(paths),"historical_subset_recovered":False}
     elif REPOSITORY == "FedLN":
         if args.download:
             raise ValueError("Use prepare_audio.py --download --tfds-cache CACHE --output ROOT, then this validator")
-        os.environ["TFDS_DATA_DIR"] = str(args.root)
-        from utils.features import source_digest
-        from data.spcm import load_raw_data
-        for split in ('train', 'test'):
-            (ids, labels, _), _ = load_raw_data(split)
-            if not len(ids):
-                raise ValueError('Prepared audio split is empty')
-        metadata = {"source_sha256": source_digest("spcm", None), "format":"FedLN waveform records and identity sidecars"}
+        with temporary_environment("TFDS_DATA_DIR", args.root):
+            from utils.features import source_digest
+            from data.spcm import load_raw_data
+            for split in ('train', 'test'):
+                (ids, labels, _), _ = load_raw_data(split)
+                if not len(ids):
+                    raise ValueError('Prepared audio split is empty')
+            metadata = {"source_sha256": source_digest("spcm", None), "format":"FedLN waveform records and identity sidecars"}
         paths = tree_files(args.root / "speech_commands")
     elif REPOSITORY == "FedCode":
         from datasets.spcm import SpeechCommands
@@ -207,6 +284,8 @@ def prepare_directory(args):
                 with wave.open(str(waveform), "rb") as audio:
                     if audio.getframerate() != 16000 or audio.getnchannels() != 1 or not audio.getnframes():
                         raise ValueError("Speech Commands requires nonempty mono 16 kHz WAVs")
+                    if len(audio.readframes(audio.getnframes())) != audio.getnframes() * audio.getnchannels() * audio.getsampwidth():
+                        raise ValueError("Speech Commands WAV has a truncated PCM payload")
         paths = tree_files(args.root / "spcm")
         metadata = {"splits":counts,"labels":12,"silence_recipe_recovered":False}
     else:
@@ -231,7 +310,7 @@ def prepare_directory(args):
             counts[split] = count
         paths = tree_files(Path(str(builder.data_dir)))
         metadata = {"full_name":builder.info.full_name,"splits":counts,"tfds":tfds.__version__}
-    return record(args.root, args.dataset, manifest(args.root, paths, args.dataset, metadata), args.validate)
+    return record(args.root, args.dataset, manifest(args.root, paths, args.dataset, metadata), args.validate, getattr(args, "_quiet", False))
 
 
 def main(argv=None):

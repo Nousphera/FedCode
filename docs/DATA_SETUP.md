@@ -4,7 +4,7 @@ Run commands from the repository root in the README's environment.
 `python scripts/prepare_data.py --help` lists datasets and modes.
 `--download` explicitly enables network acquisition; `--source` imports a safe
 NPZ or already-prepared directory. Import rejects existing destination files and
-symlinks in directory trees. `--validate` reads schema and content again and
+symlinks in directory trees. Imports validate in a temporary staging directory before publishing; failed imports leave no dataset or manifest behind. Directory imports copy only the selected dataset subtree, and auxiliary imports copy only supported media files. `--validate` reads schema and content again and
 compares the deterministic SHA-256 manifest; it never downloads. Omitting all
 three modes registers an already-present dataset after validating its schema.
 
@@ -58,3 +58,5 @@ fixed 12-class model. The historical silence generation and unknown-class
 balancing recipe was not recovered. The public archive alone therefore does
 not reproduce the paper's complete 12-class benchmark. Power-mel preprocessing
 and YAMNet training remain as described in [REPRODUCIBILITY.md](REPRODUCIBILITY.md).
+
+Speech Commands waveform loading uses the SoundFile backend installed by `requirements.txt`. Preparation checks complete PCM payloads before the training reader decodes them.
