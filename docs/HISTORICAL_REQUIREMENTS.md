@@ -1,3 +1,14 @@
+# Historical dependency transcript
+
+**Historical and unmaintained — provenance only.** These pins describe the
+original research environment and can include known vulnerabilities. They are
+not a supported installation recipe and have not been made safe by archiving.
+Use the maintained installation in [README.md](../README.md).
+
+Original file: `requirements-legacy.txt`. Original SHA-256: `bbfc80fdf28f24b34fdc769b101ae81d40b069e7828599d18397a231e6ced3b6`.
+The exact historical pins are preserved below as a non-installable transcript.
+
+```text
 aiohttp==3.8.5
 aiohttp-cors==0.7.0
 aiosignal==1.3.1
@@ -97,3 +108,4 @@ urllib3==1.26.16
 virtualenv==20.21.0
 wcwidth==0.2.6
 yarl==1.9.2
+```

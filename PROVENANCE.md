@@ -11,7 +11,7 @@ The original client/strategy/clustering implementation is retained and repaired.
 `src/utils/codec.py` implements the paper's codebook/index calibration as an
 explicit bit-packed payload. Numerical repairs and remaining limitations are
 listed in `docs/REPRODUCIBILITY.md`. Original pins remain in
-`requirements-legacy.txt`; no private history, trained checkpoint or paper
+[the historical dependency transcript](docs/HISTORICAL_REQUIREMENTS.md); no private history, trained checkpoint or paper
 result was added. Existing website, figures and citation metadata are preserved.
 
 The architecture sources correspond to these public implementations. Their

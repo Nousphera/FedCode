@@ -24,7 +24,7 @@ Existing cache directories are never removed on import. Outputs are
 `train.py` calls original research clients and strategies sequentially on one
 host and serializes all fit requests/responses with stock Flower protobufs.
 No patched Flower or Ray is needed. The older `src/main.py` Ray launcher and
-`requirements-legacy.txt` remain for comparison; their distributed execution
+[the historical dependency transcript](HISTORICAL_REQUIREMENTS.md) remain for comparison; their distributed execution
 is not newly validated. CPU message counts are not network latency measurements.
 
 ## Communication and calibration
