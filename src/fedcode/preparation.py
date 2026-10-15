@@ -7,6 +7,7 @@ from pathlib import Path, PurePosixPath
 import shutil
 import tarfile
 import tempfile
+import urllib.error
 import urllib.request
 import wave
 
@@ -19,6 +20,7 @@ SPEECH = {
     "speech_commands_test_set_v0.02.tar.gz": "cc2a00c1147c2254e9be3fa0f779d8c17421dc349b86366567a8edfa9acd51df",
 }
 SPEECH_BASE = "https://storage.googleapis.com/download.tensorflow.org/data/"
+CIFAR10_MIRRORS = ("https://air-example-data.s3.us-west-2.amazonaws.com/cifar-10-python.tar.gz",)
 
 
 def digest(path, algorithm="sha256"):
@@ -29,8 +31,13 @@ def digest(path, algorithm="sha256"):
     return checksum.hexdigest()
 
 
-def download(url, destination, checksum, algorithm="sha256"):
+def download(url, destination, checksum, algorithm="sha256", *, mirrors=()):
     """Resume partial downloads; publish only after the official checksum matches."""
+    for mirror in mirrors:
+        try:
+            return download(mirror, destination, checksum, algorithm)
+        except (urllib.error.URLError, TimeoutError):
+            print("Download mirror unavailable; trying the next source", flush=True)
     destination = Path(destination)
     destination.parent.mkdir(parents=True, exist_ok=True)
     if destination.is_symlink():
@@ -199,7 +206,8 @@ def _prepare_cifar(root, dataset, directory):
     from torchvision.datasets import CIFAR10, CIFAR100
     cls = CIFAR10 if dataset == "cifar10" else CIFAR100
     require_space(root, int(0.8 * 2**30))
-    archive = download(cls.url, root / "downloads" / cls.filename, cls.tgz_md5, "md5")
+    archive = download(cls.url, root / "downloads" / cls.filename, cls.tgz_md5, "md5",
+                       mirrors=CIFAR10_MIRRORS if dataset == "cifar10" else ())
     raw = extract_archive(archive, root / "raw" / dataset)
     histograms = {}
     for split, expected in CANONICAL_ROWS[dataset].items():
