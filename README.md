@@ -131,4 +131,4 @@ Machine-readable metadata: [CITATION.cff](CITATION.cff) · [BibTeX](citation.bib
 
 ## License
 
-[MIT](LICENSE), with model-specific MIT/BSD notices in [NOTICE](NOTICE) and `licenses/`. See [attribution](PROVENANCE.md).
+[MIT](LICENSE), with component terms in [licenses/THIRD_PARTY.txt](licenses/THIRD_PARTY.txt).

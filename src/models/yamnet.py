@@ -1,5 +1,5 @@
 # Architecture adapted from https://github.com/w-hc/torch_audioset
-# Copyright/license attribution: ../../licenses/torch_audioset-MIT.txt and NOTICE.
+# Copyright/license attribution: ../../licenses/THIRD_PARTY.txt.
 import torch
 
 CKPT_URL = "https://github.com/w-hc/torch_audioset/releases/download/v0.1/yamnet.pth"

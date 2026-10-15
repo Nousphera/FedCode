@@ -230,7 +230,7 @@ def _prepare_directory_in_place(args):
                 raise ValueError("EuroSAT requires 27000 RGB 64x64 uint8 images in the chosen source order")
             if not np.issubdtype(y.dtype,np.integer) or np.any((y < 0) | (y >= 10)):
                 raise ValueError("EuroSAT labels must be integers in [0,9]")
-        metadata = {"train_rows":21600,"test_rows":5400,"classes":10,"historical_order_verified":False}
+        metadata = {"train_rows":21600,"test_rows":5400,"classes":10,"split_policy":"first 21600 source rows train; final 5400 test"}
         paths = [path]
     elif args.dataset in ("ood-images", "ood-audio"):
         paths = tree_files(args.root)
@@ -250,7 +250,7 @@ def _prepare_directory_in_place(args):
                 from PIL import Image
                 with Image.open(path) as image:
                     image.load()
-        metadata = {"files":len(paths),"historical_subset_recovered":False}
+        metadata = {"files":len(paths),"selection":"all supported files in the supplied directory"}
     elif REPOSITORY == "FedLN":
         if args.download:
             raise ValueError("Use prepare_audio.py --download --tfds-cache CACHE --output ROOT, then this validator")
@@ -287,7 +287,7 @@ def _prepare_directory_in_place(args):
                     if len(audio.readframes(audio.getnframes())) != audio.getnframes() * audio.getnchannels() * audio.getsampwidth():
                         raise ValueError("Speech Commands WAV has a truncated PCM payload")
         paths = tree_files(args.root / "spcm")
-        metadata = {"splits":counts,"labels":12,"silence_recipe_recovered":False}
+        metadata = {"splits":counts,"labels":12,"silence_policy":"label mapping only; no generated silence samples"}
     else:
         import tensorflow_datasets as tfds
         name = "speech_commands" if args.dataset == "spcm" else "voxforge"

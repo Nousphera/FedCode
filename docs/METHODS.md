@@ -68,5 +68,4 @@ state is scoped to the invocation and cleaned on completion or exception.
 `--init-state` uses weights-only loading to initialize a new run. The generated
 fixture has 24 training and eight test images across two classes.
 
-Model attribution and license notices are in [NOTICE](../NOTICE) and
-[PROVENANCE.md](../PROVENANCE.md).
+Component terms are included in [licenses/THIRD_PARTY.txt](../licenses/THIRD_PARTY.txt).

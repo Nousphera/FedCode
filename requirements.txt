@@ -1,4 +1,4 @@
-# Maintained CPU execution, Python 3.11. Historical transcript: docs/HISTORICAL_REQUIREMENTS.md.
+# CPU environment, Python 3.11.
 torch==2.6.0
 torchvision==0.21.0
 torchaudio==2.6.0

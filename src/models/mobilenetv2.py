@@ -1,5 +1,5 @@
 # Architecture adapted from https://github.com/kuangliu/pytorch-cifar
-# Copyright/license attribution: ../../licenses/pytorch-cifar-MIT.txt and NOTICE.
+# Copyright/license attribution: ../../licenses/THIRD_PARTY.txt.
 import torch
 
 class Block(torch.nn.Module):

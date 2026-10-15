@@ -1,5 +1,5 @@
 # Architecture adapted from https://github.com/akamaster/pytorch_resnet_cifar10
-# Copyright/license attribution: ../../licenses/resnet-BSD-2-Clause.txt and NOTICE.
+# Copyright/license attribution: ../../licenses/THIRD_PARTY.txt.
 import torch
 
 class LambdaLayer(torch.nn.Module):
